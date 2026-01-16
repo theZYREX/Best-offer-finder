@@ -1,0 +1,12 @@
+body{
+    height: 1000px;
+    background: linear-gradient(#2e2e2e, #222222);
+}
+h4.farpost{
+    background-image: linear-gradient(#f4820d, #755a27);
+    color: transparent;
+    font-family: Inter, sans-serif;
+    background-clip: text;
+    font-size: 24px;
+    font-weight: bold;
+}
