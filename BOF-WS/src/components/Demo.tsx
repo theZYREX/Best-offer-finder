@@ -1,6 +1,6 @@
 function Demo() {
     return(
-        <div className="container-fluid d-grid justify-content-center">
+        <div className="container d-grid justify-content-center col-11 mb-3">
             <div className="card align-items-center rounded-5">
                     <div className="container mt-2">
                         <div className="row">
@@ -11,7 +11,7 @@ function Demo() {
                                 <h4 className='farpost'>Farpost</h4>
                             </div>
                             <div className="col d-flex justify-content-end">
-                                    !
+                                1
                             </div>
                         </div>
                     </div>
@@ -20,7 +20,7 @@ function Demo() {
                         <h2>Iphone 13</h2>
                     </div>
 
-                    <div className="container-fluid">
+                    <div className="container-fluid col-11">
                         <div id="carouselExampleIndicators" className="carousel slide">
                             <div className="carousel-indicators">
                                 <button type="button" data-bs-target="#carouselExampleIndicators" data-bs-slide-to="0"
@@ -58,7 +58,17 @@ function Demo() {
                     </div>
 
                     <div className="card-body">
-                        <h5 className="card-title d-flex justify-content-center mb-3">26 500 ₽</h5>
+
+                        <div className="container row" style={{padding:'0'}}>
+                            <div className="col">
+                                <h2 className='text-end'> 26 500 ₽</h2>
+                            </div>
+                            <div className="col-5">
+                                <text style={{color: '#1a4013'}} className='btn btn-sm btn-success rounded-5'> отличная цена </text>
+                            </div>
+                        </div>
+
+
                         <p className="card-text">iPhone 13 128гб Состояние-Отличное! Все Родное, в ремонте не был! АКБ-77! Все функции работают отлично( Face ID, TrueTone)!</p>
                         <a href="#" className="btn btn-dark rounded-4 d-flex justify-content-center">
                             <text className="d-flex justify-content-center">
