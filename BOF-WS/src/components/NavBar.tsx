@@ -1,5 +1,3 @@
-import { Input } from '@mantine/core';
-
 function NavBar() {
     return(
         <header className="mb-1 mt-3">
