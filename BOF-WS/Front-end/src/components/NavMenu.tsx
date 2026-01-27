@@ -7,7 +7,7 @@ interface NavMenuProps {
 
 function NavMenu({ activeTab, setActiveTab }: NavMenuProps) {
     const menuItems = [
-        { id: 'categories', label: 'Категории', icon: 'bi-grid', activeIcon: 'bi-grid-fill' },
+        { id: 'categories', label: 'Категории', icon: 'bi-grid', activeIcon: 'bi-grid-fill ' },
         { id: 'feed', label: 'Лента', icon: 'bi-house', activeIcon: 'bi-house-fill' },
         { id: 'favorites', label: 'Избранное', icon: 'bi-heart', activeIcon: 'bi-heart-fill' },
     ];

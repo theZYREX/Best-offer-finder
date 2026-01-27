@@ -15,35 +15,55 @@ h4.farpost{
     -webkit-box-orient: vertical;
     overflow: hidden;
 }
-
-.dock-container {
+@keyframes slideUp {
+    from { transform: translateY(100px); opacity: 1; }
+    to { transform: translateY(0); opacity: 1; }
+}
+@keyframes slideUpFade {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0px); }
+}
+.liquid-glass-base,
+.liquid-glass-dock,
+.glass-search-btn,
+.glass-search-form {
+    background: rgba(28, 28, 28, 0.37);
+    backdrop-filter: blur(50px) saturate(250%);
+    -webkit-backdrop-filter: blur(50px) saturate(250%);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+}
+.bottom-controls-wrapper {
     position: fixed;
     bottom: 20px;
     left: 0;
     right: 0;
     display: flex;
     justify-content: center;
+    align-items: center;
+    gap: 10px; /* Небольшой отступ между меню и кнопкой */
     z-index: 1000;
+    padding: 0 15px;
+    pointer-events: none; /* Пропускает клики сквозь пустые зоны */
 }
-
+.bottom-controls-wrapper > * {
+    pointer-events: auto;
+}
+.dock-container {
+    width: 80%;
+    flex-grow: 1;
+    max-width: 450px;
+}
 .liquid-glass-dock {
     position: relative;
     display: flex;
-    width: 84%;
-    max-width: 450px;
     min-height: 65px;
-    padding: 0px;
-    background: rgba(28, 28, 28, 0.37);
-    backdrop-filter: blur(50px) saturate(250%);
-    -webkit-backdrop-filter: blur(25px) saturate(200%);
     border-radius: 64px;
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
     touch-action: none;
     user-select: none;
-    overflow: hidden;
+    animation: slideUp 0.6s cubic-bezier(0.2, 1, 0.3, 1);
 }
-
 .dock-indicator {
     position: absolute;
     top: 6px;
@@ -52,11 +72,10 @@ h4.farpost{
     width: calc((100% - 12px) / 3);
     margin-left: 6px;
     background: rgba(255, 255, 255, 0.15);
-    border-radius: 24px;
+    border-radius: 32px;
     z-index: 0;
     pointer-events: none;
 }
-
 .dock-item {
     position: relative;
     z-index: 1;
@@ -68,65 +87,17 @@ h4.farpost{
     align-items: center;
     justify-content: center;
     color: rgba(255, 255, 255, 0.5);
-    transition: color 0.3s ease;
+    transition: all 0.3s ease;
     cursor: pointer;
 }
-
 .dock-item.active {
     color: #ffffff;
 }
-.dock-item.active i {
-    color: #ffffff;
-}
 .dock-label {
-    font-size: 10px;
+    font-size: 14px;
     font-weight: 500;
 }
-@keyframes slideUp {
-    from { transform: translateY(100px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
-}
-.liquid-glass-dock {
-    animation: slideUp 0.6s cubic-bezier(0.2, 1, 0.3, 1);
-}
-.liquid-glass-base {
-    background: rgba(28, 28, 28, 0.6);
-    backdrop-filter: blur(25px) saturate(200%);
-    -webkit-backdrop-filter: blur(25px) saturate(200%);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
-}
-
-.bottom-controls-wrapper {
-    position: fixed;
-    bottom: 20px;
-    left: 0;
-    right: 0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 0; /* Расстояние между меню и кнопкой поиска */
-    z-index: 1000;
-    pointer-events: none; /* Чтобы клики проходили сквозь пустые места */
-    padding: 0 15px;
-}
-
-.dock-container {
-    position: static;
-    width: auto;
-    flex-grow: 1; /* Занимает доступное место */
-    max-width: 450px;
-}
-.liquid-glass-dock {
-    background: rgba(28, 28, 28, 0.6);
-    backdrop-filter: blur(25px) saturate(200%);
-    -webkit-backdrop-filter: blur(25px) saturate(200%);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
-}
-
 .glass-search-btn {
-    pointer-events: auto;
     width: 45px;
     height: 45px;
     border-radius: 50%;
@@ -134,56 +105,40 @@ h4.farpost{
     align-items: center;
     justify-content: center;
     color: rgba(255, 255, 255, 0.7);
-    transition: all 0.3s ease;
-    background: rgba(28, 28, 28, 0.6);
-    backdrop-filter: blur(25px) saturate(200%);
-    -webkit-backdrop-filter: blur(25px) saturate(200%);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    transition: all 0.4s ease;
 }
 .glass-search-btn:active {
-    transform: scale(0.95);
-    background: rgba(73, 73, 73, 0.54);
-    color: rgba(255, 255, 255, 0.47);
-}
-.glass-search-btn.active {
+    transform: scale(0.9);
     background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.35);
-    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.glass-search-btn.active {
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.5);
 }
 .glass-search-bar-container {
     position: fixed;
-    align-items: center;
-    bottom: 90px;
-    left: 12%;
-    width: 75%;
+    bottom: 100px;
+    left: 7.5%;
+    width: 85%;
+    max-width: 450px;
     z-index: 999;
-    animation: slideUpFade 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-@keyframes slideUpFade {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
+    animation: slideUpFade .3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .glass-search-form {
     display: flex;
     align-items: center;
-    padding: 10px 15px;
-    border-radius: 20px;
-    background: rgba(28, 28, 28, 0.8);
-    backdrop-filter: blur(30px) saturate(200%);
-    -webkit-backdrop-filter: blur(30px) saturate(200%);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    padding: 5px 20px;
+    border-radius: 64px;
 }
 .glass-input {
     flex-grow: 1;
     background: transparent;
     border: none;
-    color: rgb(202, 202, 202);
+    color: #e1e1e1;
     font-size: 1rem;
     outline: none;
-    padding: 5px;
+    padding: 5px 10px;
 }
 .glass-input::placeholder {
     color: rgba(255, 255, 255, 0.4);
