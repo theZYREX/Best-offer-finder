@@ -6,114 +6,80 @@ import NavMenu from "./components/NavMenu.tsx";
 
 function App() {
     const [items, setItems] = useState([]);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState('feed');
-    const [isSearchOpen, setIsSearchOpen] = useState(false); // Состояние для поиска
+    const [isSearchOpen, setIsSearchOpen] = useState(false);
 
-    const cardsData = [
-        {
-            external_id: "101",
-            title: "Iphone 13",
-            price: "26 500",
-            images: ["https://example.com/img1.jpg"],
-            url: "/product/101",
-            date: "2023-10-01",
-        }
-    ];
-
-    const handleSearch = async (query = "Apple iPhone 13") => {
+    // Функция загрузки данных
+    const fetchItems = async (query = "") => {
         setLoading(true);
-        setActiveTab('feed');
-        setIsSearchOpen(false);
         try {
-            const response = await fetch(`http://localhost:8000/api/items?q=${encodeURIComponent(query)}`);
+            const url = query
+                ? `http://localhost:8000/api/items?q=${encodeURIComponent(query)}`
+                : 'http://localhost:8000/api/items';
+
+            const response = await fetch(url);
             const data = await response.json();
-            setItems(data);
+
+            setItems(data.items || []);
         } catch (error) {
-            console.error("Ошибка запроса:", error);
+            console.error("Ошибка запроса к бэкенду:", error);
         } finally {
             setLoading(false);
         }
     };
 
+    // Загрузка при первом запуске
     useEffect(() => {
-        handleSearch();
+        fetchItems();
     }, []);
 
-    // Скролл вверх при смене вкладки
-    useEffect(() => {
-        window.scrollTo(0, 0);
-    }, [activeTab]);
+    const handleSearch = (query) => {
+        setIsSearchOpen(false);
+        fetchItems(query);
+    };
 
     const renderContent = () => {
         if (loading) {
             return (
-                <div className="text-center text-white mt-5">
-                    <div className="spinner-border text-warning mb-3" style={{width: '3rem', height: '3rem'}}></div>
-                    <h3>Ищем на Фарпосте...</h3>
-                    <p className="text-secondary small">Это может занять несколько секунд</p>
+                <div className="text-center mt-5 text-white">
+                    <div className="spinner-border text-success" role="status"></div>
+                    <p className="mt-2">Ищем лучшие предложения...</p>
                 </div>
             );
         }
 
         switch (activeTab) {
-            case 'categories':
+            case 'feed':
                 return (
-                    <div className="text-white mt-4">
-                        <h2 className="mb-4 fw-bold text-center">Категории</h2>
-                        <div className="row g-3">
-                            {[
-                                { name: 'Электроника', icon: 'bi-cpu' },
-                                { name: 'Телефоны', icon: 'bi-phone' },
-                                { name: 'Авто', icon: 'bi-car-front' },
-                                { name: 'Дом', icon: 'bi-house' }
-                            ].map(cat => (
-                                <div key={cat.name} className="col-6">
-                                    <div className="p-4 bg-dark border border-secondary rounded-4 text-center">
-                                        <i className={`bi ${cat.icon} fs-2 text-warning`}></i>
-                                        <div className="mt-2 small">{cat.name}</div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
+                    <div className="row justify-content-center">
+                        {items.length > 0 ? (
+                            items.map((item) => (
+                                <Card
+                                    key={item.external_id}
+                                    external_id={item.external_id}
+                                    title={item.title}
+                                    price={item.price}
+                                    url={item.url}
+                                    date={item.date}
+                                    image_url={item.image_url}
+                                    description={item.description}
+                                />
+                            ))
+                        ) : (
+                            <div className="text-center text-white mt-5">
+                                <h5>Ничего не найдено 🧐</h5>
+                                <p>Попробуйте изменить запрос</p>
+                            </div>
+                        )}
                     </div>
                 );
             case 'favorites':
-                return (
-                    <div className="text-white text-center mt-5">
-                        <i className="bi bi-heart text-secondary fs-1"></i>
-                        <h2 className="mt-3">Избранное пусто</h2>
-                    </div>
-                );
-            case 'feed':
+                return <div className="text-center text-white mt-5">Пока тут пусто ❤️</div>;
+            case 'profile':
+                return <div className="text-center text-white mt-5">Настройки профиля</div>;
             default:
-                return (
-                    <div className="row">
-                        {cardsData.map((item) => (
-                            <Card
-                                key={item.external_id}
-                                external_id={item.external_id}
-                                title={item.title}
-                                price={item.price}
-                                images={item.images}
-                                url={item.url}
-                                date={item.date}
-                            />
-                        ))}
-                        {cardsData.map((item) => (
-                            <Card
-                                key={item.external_id}
-                                external_id={item.external_id}
-                                title={item.title}
-                                price={item.price}
-                                images={item.images}
-                                url={item.url}
-                                date={item.date}
-                            />
-                        ))}
-
-                    </div>
-                );
+                return null;
         }
     };
 
@@ -122,7 +88,9 @@ function App() {
             <main className="container flex-grow-1" style={{ paddingBottom: '110px', paddingTop: '20px' }}>
                 {renderContent()}
             </main>
+
             {isSearchOpen && <SearchBar onSearch={handleSearch} />}
+
             <div className="bottom-controls-wrapper">
                 <NavMenu activeTab={activeTab} setActiveTab={setActiveTab} />
                 <SearchButton isOpen={isSearchOpen} onClick={() => setIsSearchOpen(!isSearchOpen)}/>
