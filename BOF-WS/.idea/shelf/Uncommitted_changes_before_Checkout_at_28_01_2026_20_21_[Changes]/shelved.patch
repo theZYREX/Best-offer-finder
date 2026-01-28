@@ -1,0 +1,54 @@
+Index: src/components/NavBar.tsx
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>function NavBar() {\r\n    return(\r\n        <header className=\"mt-3\">\r\n            <div className=\"container-fluid d-grid  align-items-center\">\r\n                <div className=\"d-flex align-items-center justify-content-center\">\r\n                    <form className=\"col-9 col-lg-5 mb-3 mb-lg-3\" role=\"search\">\r\n                        <input type=\"search\" className=\"form-control form-control-dark text-bg-dark rounded-4 shadow-none\" placeholder=\"Поиск\" aria-label=\"Search\" />\r\n                    </form>\r\n                </div>\r\n            </div>\r\n        </header>\r\n    )\r\n}\r\n\r\nexport default NavBar;\r\n
+===================================================================
+diff --git a/src/components/NavBar.tsx b/src/components/NavBar.tsx
+--- a/src/components/NavBar.tsx	(revision 3b70d8d8ea2ad27a5f375b446bb650500bdda425)
++++ b/src/components/NavBar.tsx	(date 1769595446804)
+@@ -4,7 +4,7 @@
+             <div className="container-fluid d-grid  align-items-center">
+                 <div className="d-flex align-items-center justify-content-center">
+                     <form className="col-9 col-lg-5 mb-3 mb-lg-3" role="search">
+-                        <input type="search" className="form-control form-control-dark text-bg-dark rounded-4 shadow-none" placeholder="Поиск" aria-label="Search" />
++                        <input type="search" className="form-control form-control-dark text-bg-dark rounded-4 shadow-none" placeholder="соси жопу" aria-label="Search" />
+                     </form>
+                 </div>
+             </div>
+Index: package.json
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>{\r\n  \"name\": \"BOF\",\r\n  \"private\": true,\r\n  \"version\": \"0.0.0\",\r\n  \"type\": \"module\",\r\n  \"scripts\": {\r\n    \"dev\": \"vite\",\r\n    \"build\": \"vite build\",\r\n    \"lint\": \"eslint .\",\r\n    \"preview\": \"vite preview\"\r\n  },\r\n  \"dependencies\": {\r\n    \"bootstrap\": \"^5.3.8\",\r\n    \"react\": \"^19.2.0\",\r\n    \"react-dom\": \"^19.2.0\"\r\n  },\r\n  \"devDependencies\": {\r\n    \"@eslint/js\": \"^9.39.1\",\r\n    \"@types/react\": \"^19.2.5\",\r\n    \"@types/react-dom\": \"^19.2.3\",\r\n    \"@vitejs/plugin-react\": \"^5.1.1\",\r\n    \"eslint\": \"^9.39.1\",\r\n    \"eslint-plugin-react-hooks\": \"^7.0.1\",\r\n    \"eslint-plugin-react-refresh\": \"^0.4.24\",\r\n    \"globals\": \"^16.5.0\",\r\n    \"vite\": \"^7.2.4\"\r\n  }\r\n}\r\n
+===================================================================
+diff --git a/package.json b/package.json
+--- a/package.json	(revision 3b70d8d8ea2ad27a5f375b446bb650500bdda425)
++++ b/package.json	(date 1769595602364)
+@@ -1,28 +1,4 @@
+ {
+-  "name": "BOF",
+-  "private": true,
+-  "version": "0.0.0",
+-  "type": "module",
+-  "scripts": {
+-    "dev": "vite",
+-    "build": "vite build",
+-    "lint": "eslint .",
+-    "preview": "vite preview"
+-  },
+   "dependencies": {
+-    "bootstrap": "^5.3.8",
+-    "react": "^19.2.0",
+-    "react-dom": "^19.2.0"
+-  },
+-  "devDependencies": {
+-    "@eslint/js": "^9.39.1",
+-    "@types/react": "^19.2.5",
+-    "@types/react-dom": "^19.2.3",
+-    "@vitejs/plugin-react": "^5.1.1",
+-    "eslint": "^9.39.1",
+-    "eslint-plugin-react-hooks": "^7.0.1",
+-    "eslint-plugin-react-refresh": "^0.4.24",
+-    "globals": "^16.5.0",
+-    "vite": "^7.2.4"
+   }
+ }
