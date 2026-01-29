@@ -1,0 +1,784 @@
+Index: BOF-WS/Back-end/scratch.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import asyncio\r\nimport re\r\nfrom playwright.async_api import async_playwright\r\n\r\n# 1. Используем шаблон вместо жесткой ссылки. SEARCH_QUERY будет заменяться.\r\nBASE_URL = \"https://www.farpost.ru/vladivostok/tech/communication/cellphones/+/SEARCH_QUERY/?sortBy=pricea\"\r\n\r\ndef clean_price(price_text: str) -> int:\r\n    if not price_text:\r\n        return 0\r\n    digits = re.findall(r'\\d', price_text)\r\n    return int(\"\".join(digits)) if digits else 0\r\n\r\n# 2. Добавляем аргумент query с дефолтным значением\r\nasync def parse_farpost(limit: int = 20, query: str = \"Apple iPhone 15\"):\r\n    # Формируем ссылку: заменяем пробелы на плюсы и вставляем в URL\r\n    search_term = query.replace(\" \", \"+\")\r\n    target_url = BASE_URL.replace(\"SEARCH_QUERY\", search_term)\r\n\r\n    print(f\"\uD83D\uDD0E Запускаю парсер: '{query}' (макс. {limit})\")\r\n    print(f\"\uD83D\uDD17 URL: {target_url}\")\r\n\r\n    results = []\r\n\r\n    async with async_playwright() as p:\r\n        # headless=False чтобы ты видел процесс. Потом можно поставить True.\r\n        browser = await p.chromium.launch(headless=False)\r\n        context = await browser.new_context(\r\n            user_agent=\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36\",\r\n            viewport={'width': 1440, 'height': 1080}\r\n        )\r\n        page = await context.new_page()\r\n\r\n        try:\r\n            await page.goto(target_url, timeout=45000, wait_until=\"domcontentloaded\")\r\n\r\n            # Ждем появления списка товаров\r\n            try:\r\n                await page.wait_for_selector('tr[data-doc-id]', timeout=15000)\r\n            except:\r\n                print(\"⚠\uFE0F Товары не найдены или тайм-аут ожидания.\")\r\n                return []\r\n\r\n            listings = await page.query_selector_all('tr[data-doc-id]')\r\n            print(f\"Найдено {len(listings)} объявлений. Обрабатываю первые {limit}.\")\r\n\r\n            for i, listing in enumerate(listings[:limit]):\r\n                item_data = {'external_id': await listing.get_attribute('data-doc-id')}\r\n\r\n                if not item_data['external_id']:\r\n                    continue\r\n\r\n                # --- Заголовок, Дата, URL ---\r\n                link_element = await listing.query_selector('a.bulletinLink')\r\n                if link_element:\r\n                    item_data['title'] = (await link_element.inner_text()).strip()\r\n\r\n                    date_elem = await listing.query_selector('.date')\r\n                    if date_elem:\r\n                        raw_date = await date_elem.inner_text()\r\n                        item_data['date'] = raw_date.strip()\r\n                    else:\r\n                        item_data['date'] = \"Дата не указана\"\r\n\r\n                    href = await link_element.get_attribute('href')\r\n                    item_data['url'] = f\"https://www.farpost.ru{href}\"\r\n                else:\r\n                    continue # Пропускаем битые объявления\r\n\r\n                # --- Цена ---\r\n                price_element = await listing.query_selector('[data-role=\"price\"]')\r\n                item_data['price'] = clean_price(await price_element.inner_text()) if price_element else 0\r\n\r\n                # --- Заходим внутрь объявления ---\r\n                detail_page = await context.new_page()\r\n                try:\r\n                    await detail_page.goto(item_data['url'], timeout=30000, wait_until=\"domcontentloaded\")\r\n\r\n                    # \uD83D\uDDBC\uFE0F Картинка\r\n                    image_url = \"\"\r\n                    img_elem = await detail_page.query_selector('img.image-gallery__big-image')\r\n                    if img_elem:\r\n                        src = await img_elem.get_attribute('src')\r\n                        if src and src.startswith(('http', '//')):\r\n                            image_url = src if src.startswith('http') else f\"https:{src}\"\r\n\r\n                    if not image_url:\r\n                        # Fallback картинка\r\n                        fallback = await detail_page.query_selector('img[data-role=\"mainPhoto\"]')\r\n                        if fallback:\r\n                            src = await fallback.get_attribute('src')\r\n                            image_url = src\r\n\r\n                    item_data['image_url'] = image_url\r\n\r\n                    # \uD83D\uDCDD Описание (Твоя улучшенная логика)\r\n                    description = \"Описание не найдено\"\r\n                    desc_elem = await detail_page.query_selector('.bulletinText, p[data-field=\"text\"]')\r\n\r\n                    if not desc_elem:\r\n                        desc_elem = await detail_page.query_selector(\r\n                            '.bulletin-description, [data-role=\"description\"], [itemprop=\"description\"]'\r\n                        )\r\n\r\n                    if desc_elem:\r\n                        raw_desc = await desc_elem.inner_text()\r\n                        description = raw_desc.strip()\r\n                    else:\r\n                        # Если совсем нет описания, берем alt картинки\r\n                        if img_elem:\r\n                            alt = await img_elem.get_attribute('alt')\r\n                            if alt: description = alt\r\n\r\n                    item_data['description'] = description\r\n\r\n                except Exception as e:\r\n                    print(f\"⚠\uFE0F Ошибка деталей {item_data['external_id']}: {e}\")\r\n                    item_data['image_url'] = \"\"\r\n                    item_data['description'] = \"Ошибка загрузки\"\r\n                finally:\r\n                    await detail_page.close()\r\n\r\n                results.append(item_data)\r\n                print(f\"✅ [{i+1}/{limit}] {item_data['title']}\")\r\n\r\n        except Exception as e:\r\n            print(f\"❌ Ошибка парсера: {e}\")\r\n        finally:\r\n            await browser.close()\r\n\r\n    return results\r\n\r\nif __name__ == \"__main__\":\r\n    asyncio.run(parse_farpost(limit=3, query=\"iPhone 13\"))
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/BOF-WS/Back-end/scratch.py b/BOF-WS/Back-end/scratch.py
+--- a/BOF-WS/Back-end/scratch.py	(revision f24d6c93cd667640819bb46946d8b0808a241b09)
++++ b/BOF-WS/Back-end/scratch.py	(date 1769683166673)
+@@ -2,133 +2,113 @@
+ import re
+ from playwright.async_api import async_playwright
+ 
+-# 1. Используем шаблон вместо жесткой ссылки. SEARCH_QUERY будет заменяться.
++# Базовый URL (убрали лишний слеш перед SEARCH_QUERY)
+ BASE_URL = "https://www.farpost.ru/vladivostok/tech/communication/cellphones/+/SEARCH_QUERY/?sortBy=pricea"
+ 
+ def clean_price(price_text: str) -> int:
+-    if not price_text:
+-        return 0
++    if not price_text: return 0
+     digits = re.findall(r'\d', price_text)
+     return int("".join(digits)) if digits else 0
+ 
+-# 2. Добавляем аргумент query с дефолтным значением
+-async def parse_farpost(limit: int = 20, query: str = "Apple iPhone 15"):
+-    # Формируем ссылку: заменяем пробелы на плюсы и вставляем в URL
+-    search_term = query.replace(" ", "+")
+-    target_url = BASE_URL.replace("SEARCH_QUERY", search_term)
+-
+-    print(f"🔎 Запускаю парсер: '{query}' (макс. {limit})")
+-    print(f"🔗 URL: {target_url}")
+-
+-    results = []
+-
+-    async with async_playwright() as p:
+-        # headless=False чтобы ты видел процесс. Потом можно поставить True.
+-        browser = await p.chromium.launch(headless=False)
+-        context = await browser.new_context(
+-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+-            viewport={'width': 1440, 'height': 1080}
+-        )
+-        page = await context.new_page()
+-
+-        try:
+-            await page.goto(target_url, timeout=45000, wait_until="domcontentloaded")
+-
+-            # Ждем появления списка товаров
+-            try:
+-                await page.wait_for_selector('tr[data-doc-id]', timeout=15000)
+-            except:
+-                print("⚠️ Товары не найдены или тайм-аут ожидания.")
+-                return []
++async def parse_detail(context, item_data):
++    page = await context.new_page()
++    try:
++        # Увеличил таймаут для детальных страниц
++        await page.goto(item_data['url'], timeout=20000, wait_until="domcontentloaded")
++        await asyncio.sleep(1) # Небольшая пауза для прогрузки JS
+ 
+-            listings = await page.query_selector_all('tr[data-doc-id]')
+-            print(f"Найдено {len(listings)} объявлений. Обрабатываю первые {limit}.")
+-
+-            for i, listing in enumerate(listings[:limit]):
+-                item_data = {'external_id': await listing.get_attribute('data-doc-id')}
+-
+-                if not item_data['external_id']:
+-                    continue
+-
+-                # --- Заголовок, Дата, URL ---
+-                link_element = await listing.query_selector('a.bulletinLink')
+-                if link_element:
+-                    item_data['title'] = (await link_element.inner_text()).strip()
+-
+-                    date_elem = await listing.query_selector('.date')
+-                    if date_elem:
+-                        raw_date = await date_elem.inner_text()
+-                        item_data['date'] = raw_date.strip()
+-                    else:
+-                        item_data['date'] = "Дата не указана"
+-
+-                    href = await link_element.get_attribute('href')
+-                    item_data['url'] = f"https://www.farpost.ru{href}"
+-                else:
+-                    continue # Пропускаем битые объявления
+-
+-                # --- Цена ---
+-                price_element = await listing.query_selector('[data-role="price"]')
+-                item_data['price'] = clean_price(await price_element.inner_text()) if price_element else 0
+-
+-                # --- Заходим внутрь объявления ---
+-                detail_page = await context.new_page()
+-                try:
+-                    await detail_page.goto(item_data['url'], timeout=30000, wait_until="domcontentloaded")
+-
+-                    # 🖼️ Картинка
+-                    image_url = ""
+-                    img_elem = await detail_page.query_selector('img.image-gallery__big-image')
+-                    if img_elem:
+-                        src = await img_elem.get_attribute('src')
+-                        if src and src.startswith(('http', '//')):
+-                            image_url = src if src.startswith('http') else f"https:{src}"
++        image_url = ""
++        img_elem = await page.query_selector('img.image-gallery__big-image')
++        if img_elem:
++            src = await img_elem.get_attribute('src')
++            if src: image_url = src if src.startswith('http') else f"https:{src}"
+ 
+-                    if not image_url:
+-                        # Fallback картинка
+-                        fallback = await detail_page.query_selector('img[data-role="mainPhoto"]')
+-                        if fallback:
+-                            src = await fallback.get_attribute('src')
+-                            image_url = src
++        if not image_url:
++            fallback = await page.query_selector('img[data-role="mainPhoto"]')
++            if fallback: image_url = await fallback.get_attribute('src')
+ 
+-                    item_data['image_url'] = image_url
++        item_data['image_url'] = image_url
+ 
+-                    # 📝 Описание (Твоя улучшенная логика)
+-                    description = "Описание не найдено"
+-                    desc_elem = await detail_page.query_selector('.bulletinText, p[data-field="text"]')
+-
+-                    if not desc_elem:
+-                        desc_elem = await detail_page.query_selector(
+-                            '.bulletin-description, [data-role="description"], [itemprop="description"]'
+-                        )
+-
+-                    if desc_elem:
+-                        raw_desc = await desc_elem.inner_text()
+-                        description = raw_desc.strip()
+-                    else:
+-                        # Если совсем нет описания, берем alt картинки
+-                        if img_elem:
+-                            alt = await img_elem.get_attribute('alt')
+-                            if alt: description = alt
+-
+-                    item_data['description'] = description
++        description = "Описание не найдено"
++        desc_elem = await page.query_selector('.bulletinText, p[data-field="text"], .bulletin-description')
++        if desc_elem:
++            item_data['description'] = (await desc_elem.inner_text()).strip()
++        else:
++            item_data['description'] = "Описание отсутствует"
+ 
+-                except Exception as e:
+-                    print(f"⚠️ Ошибка деталей {item_data['external_id']}: {e}")
+-                    item_data['image_url'] = ""
+-                    item_data['description'] = "Ошибка загрузки"
+-                finally:
+-                    await detail_page.close()
++    except Exception as e:
++        print(f"⚠️ Ошибка деталей {item_data['external_id']}: {e}")
++        item_data['description'] = "Ошибка загрузки"
++    finally:
++        await page.close()
++    return item_data
++
++async def parse_farpost(limit: int = 20, query: str = "Apple iPhone 15"):
++    search_term = query.replace(" ", "+")
++    target_url = BASE_URL.replace("SEARCH_QUERY", search_term)
++
++    print(f"🚀 Запуск браузера для: '{query}'")
++    results = []
++
++    async with async_playwright() as p:
++        # headless=False — открывает окно браузера
++        # slow_mo=100 — замедляет действия, чтобы не забанили
++        browser = await p.chromium.launch(headless=False, slow_mo=100)
++        context = await browser.new_context(
++            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
++        )
++        page = await context.new_page()
++
++        try:
++            await page.goto(target_url, timeout=20000, wait_until="networkidle")
++
++            # Ждем появления строк с объявлениями
++            await page.wait_for_selector('tr[data-doc-id]', timeout=1000)
++            listings = await page.query_selector_all('tr[data-doc-id]')
++
++            initial_items = []
++            for listing in listings[:limit]:
++                # Проверяем, не является ли строка рекламной или пустой
++                doc_id = await listing.get_attribute('data-doc-id')
++                link = await listing.query_selector('a.bulletinLink')
++
++                if not link or not doc_id: continue
++
++                title = (await link.inner_text()).strip()
++                href = await link.get_attribute('href')
++                url = f"https://www.farpost.ru{href}"
++
++                price_el = await listing.query_selector('[data-role="price"]')
++                price = clean_price(await price_el.inner_text()) if price_el else 0
++
++                date_el = await listing.query_selector('.date')
++                date = (await date_el.inner_text()).strip() if date_el else ""
+ 
+-                results.append(item_data)
+-                print(f"✅ [{i+1}/{limit}] {item_data['title']}")
++                initial_items.append({
++                    'external_id': doc_id,
++                    'title': title,
++                    'url': url,
++                    'price': price,
++                    'date': date
++                })
++
++            print(f"📋 Найдено ссылок: {len(initial_items)}. Собираю детали...")
++
++            sem = asyncio.Semaphore(5) # Ограничим до 3 вкладок, чтобы ты видел процесс
++
++            async def safe_parse(item):
++                async with sem:
++                    return await parse_detail(context, item)
++
++            tasks = [safe_parse(item) for item in initial_items]
++            results = await asyncio.gather(*tasks)
+ 
+         except Exception as e:
+-            print(f"❌ Ошибка парсера: {e}")
++            print(f"❌ Ошибка на главной странице: {e}")
+         finally:
+             await browser.close()
+ 
+     return results
+ 
+ if __name__ == "__main__":
+-    asyncio.run(parse_farpost(limit=3, query="iPhone 13"))
+\ No newline at end of file
++    asyncio.run(parse_farpost(limit=3, query="iPhone 15"))
+\ No newline at end of file
+Index: .idea/db-forest-config.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/db-forest-config.xml b/.idea/db-forest-config.xml
+new file mode 100644
+--- /dev/null	(date 1769681637195)
++++ b/.idea/db-forest-config.xml	(date 1769681637195)
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<project version="4">
++  <component name="db-tree-configuration">
++    <option name="data" value="----------------------------------------&#10;1:0:1dab3b76-7dbe-4195-9b49-65734eb74d23&#10;2:0:96285f7b-dc54-4c1d-979d-a1e50f048bb7&#10;" />
++  </component>
++</project>
+\ No newline at end of file
+Index: .idea/sqldialects.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/sqldialects.xml b/.idea/sqldialects.xml
+new file mode 100644
+--- /dev/null	(date 1769681235472)
++++ b/.idea/sqldialects.xml	(date 1769681235472)
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<project version="4">
++  <component name="SqlDialectMappings">
++    <file url="file://$PROJECT_DIR$/BOF-WS/Back-end/main.py" dialect="GenericSQL" />
++  </component>
++</project>
+\ No newline at end of file
+Index: BOF-WS/Front-end/src/App.jsx
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import { useState, useEffect } from 'react';\r\nimport SearchBar from \"./components/SearchBar.tsx\";\r\nimport SearchButton from \"./components/SearchButton.tsx\";\r\nimport Card from \"./components/Card.tsx\";\r\nimport NavMenu from \"./components/NavMenu.tsx\";\r\n\r\nfunction App() {\r\n    const [items, setItems] = useState([]);\r\n    const [favorites, setFavorites] = useState([]); // Состояние для избранного\r\n    const [loading, setLoading] = useState(false);\r\n    const [activeTab, setActiveTab] = useState('feed');\r\n    const [isSearchOpen, setIsSearchOpen] = useState(false);\r\n\r\n    // 1. Загрузка избранного из LocalStorage при старте\r\n    useEffect(() => {\r\n        const savedFavs = localStorage.getItem('myFavorites');\r\n        if (savedFavs) {\r\n            setFavorites(JSON.parse(savedFavs));\r\n        }\r\n        // Первичная загрузка ленты\r\n        fetchItems();\r\n    }, []);\r\n\r\n    // 2. Функция загрузки товаров\r\n    const fetchItems = async (query = \"\") => {\r\n        setLoading(true);\r\n        try {\r\n            const url = query\r\n                ? `http://localhost:8000/api/items?q=${encodeURIComponent(query)}`\r\n                : 'http://localhost:8000/api/items';\r\n\r\n            const response = await fetch(url);\r\n            const data = await response.json();\r\n            setItems(data.items || []);\r\n        } catch (error) {\r\n            console.error(\"Ошибка:\", error);\r\n        } finally {\r\n            setLoading(false);\r\n        }\r\n    };\r\n\r\n    // 3. Логика добавления/удаления из избранного\r\n    const toggleFavorite = (external_id) => {\r\n        // Ищем, есть ли товар уже в избранном (среди favorites или среди текущих items)\r\n        const isAlreadyFav = favorites.some(fav => fav.external_id === external_id);\r\n\r\n        let newFavorites;\r\n        if (isAlreadyFav) {\r\n            // Если есть - удаляем\r\n            newFavorites = favorites.filter(fav => fav.external_id !== external_id);\r\n        } else {\r\n            // Если нет - находим товар в общем списке items и добавляем\r\n            const itemToAdd = items.find(item => item.external_id === external_id);\r\n            if (itemToAdd) {\r\n                newFavorites = [...favorites, itemToAdd];\r\n            } else {\r\n                return; // Защита от ошибок\r\n            }\r\n        }\r\n\r\n        setFavorites(newFavorites);\r\n        localStorage.setItem('myFavorites', JSON.stringify(newFavorites));\r\n    };\r\n\r\n    const handleSearch = (query) => {\r\n        setIsSearchOpen(false);\r\n        setActiveTab('feed'); // При поиске переключаем на ленту\r\n        fetchItems(query);\r\n    };\r\n\r\n    // 4. Рендеринг контента в зависимости от вкладки\r\n    const renderContent = () => {\r\n        if (loading && activeTab === 'feed') {\r\n            return (\r\n                <div className=\"text-center text-white mt-5\">\r\n                    <div className=\"spinner-border text-success\" role=\"status\"></div>\r\n                    <p>Загрузка...</p>\r\n                </div>\r\n            );\r\n        }\r\n\r\n        if (activeTab === 'categories'){\r\n            return (\r\n                <div className=\"text-white mt-4\">\r\n                    <h2 className=\"mb-4 fw-bold text-center\">Категории</h2>\r\n                    <div className=\"row g-3\">\r\n                        {[\r\n                            { name: 'Электроника', icon: 'bi-cpu' },\r\n                            { name: 'Телефоны', icon: 'bi-phone' },\r\n                            { name: 'Авто', icon: 'bi-car-front' },\r\n                            { name: 'Дом', icon: 'bi-house' }\r\n                        ].map(cat => (\r\n                            <div key={cat.name} className=\"col-6\">\r\n                                <div className=\"p-4 bg-dark border border-secondary rounded-4 text-center\">\r\n                                    <i className={`bi ${cat.icon} fs-2 text-warning`}></i>\r\n                                    <div className=\"mt-2 small\">{cat.name}</div>\r\n                                </div>\r\n                            </div>\r\n                        ))}\r\n                    </div>\r\n                </div>\r\n            )};\r\n\r\n        // Выбираем, какой список показывать: Лента или Избранное\r\n        const displayItems = activeTab === 'favorites' ? favorites : items;\r\n\r\n        if (activeTab === 'favorites' && favorites.length === 0) {\r\n            return (\r\n                <div className=\"text-center text-white mt-5\">\r\n                    <i className=\"bi bi-heart-break fs-1 text-secondary\"></i>\r\n                    <h3 className=\"mt-3\">В избранном пусто</h3>\r\n                    <p>Добавляйте товары, нажимая на сердечко ❤\uFE0F</p>\r\n                </div>\r\n            );\r\n        }\r\n\r\n        if (displayItems.length === 0 && !loading) {\r\n            return <div className=\"text-center text-white mt-5\">Ничего не найдено \uD83E\uDD37\u200D♂\uFE0F</div>;\r\n        }\r\n\r\n        return (\r\n            <div className=\"row justify-content-center gap-xxl-3 gap-md-2 gap-lg-4\">\r\n                {displayItems.map((item) => (\r\n                    <Card\r\n                        key={item.external_id}\r\n                        external_id={item.external_id}\r\n                        title={item.title}\r\n                        price={item.price}\r\n                        url={item.url}\r\n                        date={item.date}\r\n                        image_url={item.image_url}\r\n                        description={item.description}\r\n                        // Передаем состояние: проверяем, есть ли этот конкретный ID в массиве favorites\r\n                        isFavorite={favorites.some(fav => fav.external_id === item.external_id)}\r\n                        onToggleFavorite={toggleFavorite}\r\n                    />\r\n                ))}\r\n            </div>\r\n        );\r\n    };\r\n\r\n    return (\r\n        <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#121212' }}>\r\n            <main className=\"container flex-grow-1\" style={{ paddingBottom: '110px', paddingTop: '20px' }}>\r\n                {renderContent()}\r\n            </main>\r\n\r\n            {isSearchOpen && <SearchBar onSearch={handleSearch} />}\r\n\r\n            <div className=\"bottom-controls-wrapper\">\r\n                <NavMenu activeTab={activeTab} setActiveTab={setActiveTab} />\r\n                <SearchButton isOpen={isSearchOpen} onClick={() => setIsSearchOpen(!isSearchOpen)}/>\r\n            </div>\r\n        </div>\r\n    );\r\n}\r\n\r\nexport default App;
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/BOF-WS/Front-end/src/App.jsx b/BOF-WS/Front-end/src/App.jsx
+--- a/BOF-WS/Front-end/src/App.jsx	(revision f24d6c93cd667640819bb46946d8b0808a241b09)
++++ b/BOF-WS/Front-end/src/App.jsx	(date 1769682906006)
+@@ -2,28 +2,47 @@
+ import SearchBar from "./components/SearchBar.tsx";
+ import SearchButton from "./components/SearchButton.tsx";
+ import Card from "./components/Card.tsx";
++import CardSkeleton from "./components/CardSkeleton.tsx"; // Нужно создать
+ import NavMenu from "./components/NavMenu.tsx";
+ 
+ function App() {
+     const [items, setItems] = useState([]);
+-    const [favorites, setFavorites] = useState([]); // Состояние для избранного
++    const [favorites, setFavorites] = useState([]);
+     const [loading, setLoading] = useState(false);
+     const [activeTab, setActiveTab] = useState('feed');
+     const [isSearchOpen, setIsSearchOpen] = useState(false);
++    const [setCurrentQuery] = useState("");
+ 
+-    // 1. Загрузка избранного из LocalStorage при старте
++    // Инициализация Telegram WebApp
+     useEffect(() => {
++        if (window.Telegram?.WebApp) {
++            const twa = window.Telegram.WebApp;
++            twa.ready();
++            twa.expand();
++            // Установка цвета хедера в стиль приложения
++            twa.setHeaderColor('#121212');
++        }
++
+         const savedFavs = localStorage.getItem('myFavorites');
+-        if (savedFavs) {
+-            setFavorites(JSON.parse(savedFavs));
+-        }
+-        // Первичная загрузка ленты
++        if (savedFavs) setFavorites(JSON.parse(savedFavs));
++
+         fetchItems();
+     }, []);
+ 
+-    // 2. Функция загрузки товаров
++    // Haptic Feedback Helper
++    const triggerHaptic = (type = 'light') => {
++        if (window.Telegram?.WebApp?.HapticFeedback) {
++            const haptic = window.Telegram.WebApp.HapticFeedback;
++            if (type === 'light') haptic.impactOccurred('light');
++            if (type === 'medium') haptic.impactOccurred('medium');
++            if (type === 'error') haptic.notificationOccurred('error');
++            if (type === 'success') haptic.notificationOccurred('success');
++        }
++    };
++
+     const fetchItems = async (query = "") => {
+         setLoading(true);
++        setCurrentQuery(query);
+         try {
+             const url = query
+                 ? `http://localhost:8000/api/items?q=${encodeURIComponent(query)}`
+@@ -32,30 +51,26 @@
+             const response = await fetch(url);
+             const data = await response.json();
+             setItems(data.items || []);
++            if (query) triggerHaptic('success');
+         } catch (error) {
+             console.error("Ошибка:", error);
++            triggerHaptic('error');
+         } finally {
+             setLoading(false);
+         }
+     };
+ 
+-    // 3. Логика добавления/удаления из избранного
+     const toggleFavorite = (external_id) => {
+-        // Ищем, есть ли товар уже в избранном (среди favorites или среди текущих items)
++        triggerHaptic('medium');
+         const isAlreadyFav = favorites.some(fav => fav.external_id === external_id);
+-
+         let newFavorites;
++
+         if (isAlreadyFav) {
+-            // Если есть - удаляем
+             newFavorites = favorites.filter(fav => fav.external_id !== external_id);
+         } else {
+-            // Если нет - находим товар в общем списке items и добавляем
+             const itemToAdd = items.find(item => item.external_id === external_id);
+-            if (itemToAdd) {
+-                newFavorites = [...favorites, itemToAdd];
+-            } else {
+-                return; // Защита от ошибок
+-            }
++            if (itemToAdd) newFavorites = [...favorites, itemToAdd];
++            else return;
+         }
+ 
+         setFavorites(newFavorites);
+@@ -64,20 +79,11 @@
+ 
+     const handleSearch = (query) => {
+         setIsSearchOpen(false);
+-        setActiveTab('feed'); // При поиске переключаем на ленту
++        setActiveTab('feed');
+         fetchItems(query);
+     };
+ 
+-    // 4. Рендеринг контента в зависимости от вкладки
+     const renderContent = () => {
+-        if (loading && activeTab === 'feed') {
+-            return (
+-                <div className="text-center text-white mt-5">
+-                    <div className="spinner-border text-success" role="status"></div>
+-                    <p>Загрузка...</p>
+-                </div>
+-            );
+-        }
+ 
+         if (activeTab === 'categories'){
+             return (
+@@ -99,38 +105,26 @@
+                         ))}
+                     </div>
+                 </div>
+-            )};
++            );}
+ 
+-        // Выбираем, какой список показывать: Лента или Избранное
++
+         const displayItems = activeTab === 'favorites' ? favorites : items;
+ 
+-        if (activeTab === 'favorites' && favorites.length === 0) {
++        if (displayItems.length === 0) {
+             return (
+-                <div className="text-center text-white mt-5">
+-                    <i className="bi bi-heart-break fs-1 text-secondary"></i>
+-                    <h3 className="mt-3">В избранном пусто</h3>
+-                    <p>Добавляйте товары, нажимая на сердечко ❤️</p>
++                <div className="text-center text-white mt-5 opacity-50">
++                    <i className={`bi ${activeTab === 'favorites' ? 'bi-heart' : 'bi-search'} fs-1`}></i>
++                    <p className="mt-2">{activeTab === 'favorites' ? 'Список избранного пуст' : 'Ничего не найдено'}</p>
+                 </div>
+             );
+         }
+ 
+-        if (displayItems.length === 0 && !loading) {
+-            return <div className="text-center text-white mt-5">Ничего не найдено 🤷‍♂️</div>;
+-        }
+-
+         return (
+             <div className="row justify-content-center gap-xxl-3 gap-md-2 gap-lg-4">
+                 {displayItems.map((item) => (
+                     <Card
+                         key={item.external_id}
+-                        external_id={item.external_id}
+-                        title={item.title}
+-                        price={item.price}
+-                        url={item.url}
+-                        date={item.date}
+-                        image_url={item.image_url}
+-                        description={item.description}
+-                        // Передаем состояние: проверяем, есть ли этот конкретный ID в массиве favorites
++                        {...item}
+                         isFavorite={favorites.some(fav => fav.external_id === item.external_id)}
+                         onToggleFavorite={toggleFavorite}
+                     />
+@@ -141,6 +135,7 @@
+ 
+     return (
+         <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#121212' }}>
++            {/* Pull to Refresh Indicator (Упрощенный) */}
+             <main className="container flex-grow-1" style={{ paddingBottom: '110px', paddingTop: '20px' }}>
+                 {renderContent()}
+             </main>
+@@ -148,8 +143,14 @@
+             {isSearchOpen && <SearchBar onSearch={handleSearch} />}
+ 
+             <div className="bottom-controls-wrapper">
+-                <NavMenu activeTab={activeTab} setActiveTab={setActiveTab} />
+-                <SearchButton isOpen={isSearchOpen} onClick={() => setIsSearchOpen(!isSearchOpen)}/>
++                <NavMenu activeTab={activeTab} setActiveTab={(tab) => {
++                    triggerHaptic('light');
++                    setActiveTab(tab);
++                }} />
++                <SearchButton isOpen={isSearchOpen} onClick={() => {
++                    triggerHaptic('light');
++                    setIsSearchOpen(!isSearchOpen);
++                }}/>
+             </div>
+         </div>
+     );
+Index: BOF-WS/Front-end/src/styles.css
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>body{\r\n    background: linear-gradient(#2e2e2e, #222222);\r\n}\r\n.card{\r\n    min-width: 350px;\r\n}\r\nh4.farpost{\r\n    background-image: linear-gradient(#f4820d, #755a27);\r\n    color: transparent;\r\n    font-family: Inter, sans-serif;\r\n    background-clip: text;\r\n    font-size: 24px;\r\n    font-weight: bold;\r\n}\r\n.truncate-multi-line {\r\n    display: -webkit-box;\r\n    -webkit-line-clamp: 4;\r\n    -webkit-box-orient: vertical;\r\n    overflow: hidden;\r\n}\r\n@keyframes slideUp {\r\n    from { transform: translateY(100px); opacity: 1; }\r\n    to { transform: translateY(0); opacity: 1; }\r\n}\r\n@keyframes slideUpFade {\r\n    from { opacity: 0; transform: translateY(20px); }\r\n    to { opacity: 1; transform: translateY(0px); }\r\n}\r\n.liquid-glass-base,\r\n.liquid-glass-dock,\r\n.glass-search-btn,\r\n.glass-search-form {\r\n    background: rgba(28, 28, 28, 0.37);\r\n    backdrop-filter: blur(50px) saturate(250%);\r\n    -webkit-backdrop-filter: blur(50px) saturate(250%);\r\n    border: 1px solid rgba(255, 255, 255, 0.09);\r\n    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);\r\n}\r\n.bottom-controls-wrapper {\r\n    position: fixed;\r\n    bottom: 20px;\r\n    left: 0;\r\n    right: 0;\r\n    display: flex;\r\n    justify-content: center;\r\n    align-items: center;\r\n    gap: 10px; /* Небольшой отступ между меню и кнопкой */\r\n    z-index: 1000;\r\n    padding: 0 15px;\r\n    pointer-events: none; /* Пропускает клики сквозь пустые зоны */\r\n}\r\n.bottom-controls-wrapper > * {\r\n    pointer-events: auto;\r\n}\r\n.dock-container {\r\n    width: 80%;\r\n    flex-grow: 1;\r\n    max-width: 450px;\r\n}\r\n.liquid-glass-dock {\r\n    position: relative;\r\n    display: flex;\r\n    min-height: 65px;\r\n    border-radius: 64px;\r\n    overflow: hidden;\r\n    touch-action: none;\r\n    user-select: none;\r\n    animation: slideUp 0.6s cubic-bezier(0.2, 1, 0.3, 1);\r\n}\r\n.dock-indicator {\r\n    position: absolute;\r\n    top: 6px;\r\n    bottom: 6px;\r\n    left: 0;\r\n    width: calc((100% - 12px) / 3);\r\n    margin-left: 6px;\r\n    background: rgba(255, 255, 255, 0.15);\r\n    border-radius: 32px;\r\n    z-index: 0;\r\n    pointer-events: none;\r\n}\r\n.dock-item {\r\n    position: relative;\r\n    z-index: 1;\r\n    flex: 1;\r\n    background: transparent;\r\n    border: none;\r\n    display: flex;\r\n    flex-direction: column;\r\n    align-items: center;\r\n    justify-content: center;\r\n    color: rgba(255, 255, 255, 0.5);\r\n    transition: all 0.3s ease;\r\n    cursor: pointer;\r\n}\r\n.dock-item.active {\r\n    color: #ffffff;\r\n}\r\n.dock-label {\r\n    font-size: 14px;\r\n    font-weight: 500;\r\n}\r\n.glass-search-btn {\r\n    width: 45px;\r\n    height: 45px;\r\n    border-radius: 50%;\r\n    display: flex;\r\n    align-items: center;\r\n    justify-content: center;\r\n    color: rgba(255, 255, 255, 0.7);\r\n    transition: all 0.4s ease;\r\n}\r\n.glass-search-btn:active {\r\n    transform: scale(0.9);\r\n    background: rgba(255, 255, 255, 0.1);\r\n}\r\n\r\n.glass-search-btn.active {\r\n    color: #ffffff;\r\n    border-color: rgba(255, 255, 255, 0.5);\r\n}\r\n.glass-search-bar-container {\r\n    position: fixed;\r\n    bottom: 100px;\r\n    left: 7.5%;\r\n    width: 85%;\r\n    max-width: 450px;\r\n    z-index: 999;\r\n    animation: slideUpFade .3s cubic-bezier(0.2, 0.8, 0.2, 1);\r\n}\r\n.glass-search-form {\r\n    display: flex;\r\n    align-items: center;\r\n    padding: 5px 20px;\r\n    border-radius: 64px;\r\n}\r\n.glass-input {\r\n    flex-grow: 1;\r\n    background: transparent;\r\n    border: none;\r\n    color: #e1e1e1;\r\n    font-size: 1rem;\r\n    outline: none;\r\n    padding: 5px 10px;\r\n}\r\n.glass-input::placeholder {\r\n    color: rgba(255, 255, 255, 0.4);\r\n}\r\n.glass-input::-webkit-search-cancel-button {\r\n    display: none;\r\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/BOF-WS/Front-end/src/styles.css b/BOF-WS/Front-end/src/styles.css
+--- a/BOF-WS/Front-end/src/styles.css	(revision f24d6c93cd667640819bb46946d8b0808a241b09)
++++ b/BOF-WS/Front-end/src/styles.css	(date 1769681555231)
+@@ -148,4 +148,21 @@
+ }
+ .glass-input::-webkit-search-cancel-button {
+     display: none;
++}
++@keyframes pulse {
++    0% { opacity: 0.6; }
++    50% { opacity: 0.3; }
++    100% { opacity: 0.6; }
++}
++
++.skeleton-pulse {
++    animation: pulse 1.5s infinite ease-in-out;
++}
++
++/* Стиль для Liquid Glass контейнеров */
++.card {
++    backdrop-filter: blur(10px);
++    -webkit-backdrop-filter: blur(10px);
++    background: rgba(255, 255, 255, 0.03);
++    border: 1px solid rgba(255, 255, 255, 0.08);
+ }
+\ No newline at end of file
+Index: BOF-WS/Front-end/src/components/CardSkeleton.tsx
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/BOF-WS/Front-end/src/components/CardSkeleton.tsx b/BOF-WS/Front-end/src/components/CardSkeleton.tsx
+new file mode 100644
+--- /dev/null	(date 1769681714514)
++++ b/BOF-WS/Front-end/src/components/CardSkeleton.tsx	(date 1769681714514)
+@@ -0,0 +1,22 @@
++function CardSkeleton() {
++    return (
++        <div className="container d-grid justify-content-center col-11 mb-3 col-lg-3">
++            <div className="card align-items-center rounded-5 shadow-sm" style={{
++                backgroundColor: 'rgba(255,255,255,0.05)',
++                border: '1px solid rgba(255,255,255,0.1)',
++                minHeight: '450px',
++                width: '100%'
++            }}>
++                <div className="w-100 p-3">
++                    <div className="skeleton-pulse rounded-3 mb-4" style={{ height: '30px', width: '60%', margin: '0 auto', background: 'rgba(255,255,255,0.1)' }}></div>
++                    <div className="skeleton-pulse rounded-4 mb-3" style={{ height: '200px', width: '100%', background: 'rgba(255,255,255,0.1)' }}></div>
++                    <div className="skeleton-pulse rounded-3 mb-2" style={{ height: '20px', width: '90%', background: 'rgba(255,255,255,0.1)' }}></div>
++                    <div className="skeleton-pulse rounded-3 mb-4" style={{ height: '20px', width: '70%', background: 'rgba(255,255,255,0.1)' }}></div>
++                    <div className="skeleton-pulse rounded-5" style={{ height: '45px', width: '100%', background: 'rgba(255,255,255,0.1)' }}></div>
++                </div>
++            </div>
++        </div>
++    );
++}
++
++export default CardSkeleton;
+\ No newline at end of file
+Index: .idea/workspace.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<project version=\"4\">\r\n  <component name=\"AutoImportSettings\">\r\n    <option name=\"autoReloadType\" value=\"SELECTIVE\" />\r\n  </component>\r\n  <component name=\"ChangeListManager\">\r\n    <list default=\"true\" id=\"7fe44e6f-ac06-41da-9594-b5039fb1dbb7\" name=\"Changes\" comment=\"update\">\r\n      <change beforePath=\"$PROJECT_DIR$/.idea/workspace.xml\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/.idea/workspace.xml\" afterDir=\"false\" />\r\n      <change beforePath=\"$PROJECT_DIR$/BOF-WS/Back-end/main.py\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/BOF-WS/Back-end/main.py\" afterDir=\"false\" />\r\n      <change beforePath=\"$PROJECT_DIR$/BOF-WS/Back-end/scratch.py\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/BOF-WS/Back-end/scratch.py\" afterDir=\"false\" />\r\n    </list>\r\n    <option name=\"SHOW_DIALOG\" value=\"false\" />\r\n    <option name=\"HIGHLIGHT_CONFLICTS\" value=\"true\" />\r\n    <option name=\"HIGHLIGHT_NON_ACTIVE_CHANGELIST\" value=\"false\" />\r\n    <option name=\"LAST_RESOLUTION\" value=\"IGNORE\" />\r\n  </component>\r\n  <component name=\"FileTemplateManagerImpl\">\r\n    <option name=\"RECENT_TEMPLATES\">\r\n      <list>\r\n        <option value=\"Python Script\" />\r\n      </list>\r\n    </option>\r\n  </component>\r\n  <component name=\"Git.Settings\">\r\n    <option name=\"RECENT_BRANCH_BY_REPOSITORY\">\r\n      <map>\r\n        <entry key=\"$PROJECT_DIR$\" value=\"slave\" />\r\n      </map>\r\n    </option>\r\n    <option name=\"RECENT_GIT_ROOT_PATH\" value=\"$PROJECT_DIR$\" />\r\n  </component>\r\n  <component name=\"GitHubPullRequestSearchHistory\">{\r\n  &quot;lastFilter&quot;: {\r\n    &quot;state&quot;: &quot;OPEN&quot;,\r\n    &quot;assignee&quot;: &quot;fathumans&quot;\r\n  }\r\n}</component>\r\n  <component name=\"GithubPullRequestsUISettings\">{\r\n  &quot;selectedUrlAndAccountId&quot;: {\r\n    &quot;url&quot;: &quot;https://github.com/theZYREX/Best-offer-finder.git&quot;,\r\n    &quot;accountId&quot;: &quot;f97dc36b-086b-4764-a368-62ae4ad26cdc&quot;\r\n  }\r\n}</component>\r\n  <component name=\"ProblemsViewState\">\r\n    <option name=\"selectedTabId\" value=\"CurrentFile\" />\r\n  </component>\r\n  <component name=\"ProjectColorInfo\">{\r\n  &quot;associatedIndex&quot;: 5\r\n}</component>\r\n  <component name=\"ProjectId\" id=\"38slQc3vs11oYQuiUGBvkQfVWte\" />\r\n  <component name=\"ProjectLevelVcsManager\">\r\n    <ConfirmationsSetting value=\"2\" id=\"Add\" />\r\n  </component>\r\n  <component name=\"ProjectViewState\">\r\n    <option name=\"hideEmptyMiddlePackages\" value=\"true\" />\r\n    <option name=\"showLibraryContents\" value=\"true\" />\r\n  </component>\r\n  <component name=\"PropertiesComponent\">{\r\n  &quot;keyToString&quot;: {\r\n    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,\r\n    &quot;JavaScript Debug.127.0.0.1:8000.executor&quot;: &quot;Debug&quot;,\r\n    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,\r\n    &quot;Python.Backend: FastAPI.executor&quot;: &quot;Run&quot;,\r\n    &quot;Python.main.executor&quot;: &quot;Run&quot;,\r\n    &quot;Python.scratch.executor&quot;: &quot;Run&quot;,\r\n    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,\r\n    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,\r\n    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,\r\n    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,\r\n    &quot;git-widget-placeholder&quot;: &quot;main&quot;,\r\n    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,\r\n    &quot;javascript.preferred.runtime.type.id&quot;: &quot;node&quot;,\r\n    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,\r\n    &quot;node.js.detected.package.standard&quot;: &quot;true&quot;,\r\n    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,\r\n    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,\r\n    &quot;node.js.selected.package.standard&quot;: &quot;&quot;,\r\n    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,\r\n    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,\r\n    &quot;npm.dev.executor&quot;: &quot;Run&quot;,\r\n    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;,\r\n    &quot;ts.external.directory.path&quot;: &quot;C:\\\\Program Files\\\\JetBrains\\\\WebStorm 2025.3.1.1\\\\plugins\\\\javascript-plugin\\\\jsLanguageServicesImpl\\\\external&quot;,\r\n    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;\r\n  }\r\n}</component>\r\n  <component name=\"RecentsManager\">\r\n    <key name=\"MoveFile.RECENT_KEYS\">\r\n      <recent name=\"C:\\Users\\night\\WebstormProjects\\Best-offer-finder\\BOF-WS\\Front-end\\src\\components\" />\r\n      <recent name=\"C:\\Users\\night\\WebstormProjects\\Best-offer-finder\\BOF-WS\\Front-end\\src\" />\r\n      <recent name=\"C:\\Users\\night\\WebstormProjects\\Best-offer-finder\" />\r\n      <recent name=\"C:\\Users\\night\\WebstormProjects\\Best-offer-finder\\BOF-WS\\Back-end\" />\r\n      <recent name=\"C:\\Users\\night\\WebstormProjects\\Best-offer-finder\\BOF-WS\\Front-end\\public\" />\r\n    </key>\r\n  </component>\r\n  <component name=\"RunManager\" selected=\"npm.dev\">\r\n    <configuration name=\"main\" type=\"PythonConfigurationType\" factoryName=\"Python\" temporary=\"true\" nameIsGenerated=\"true\">\r\n      <module name=\"Best-offer-finder\" />\r\n      <option name=\"ENV_FILES\" value=\"\" />\r\n      <option name=\"INTERPRETER_OPTIONS\" value=\"\" />\r\n      <option name=\"PARENT_ENVS\" value=\"true\" />\r\n      <envs>\r\n        <env name=\"PYTHONUNBUFFERED\" value=\"1\" />\r\n      </envs>\r\n      <option name=\"SDK_HOME\" value=\"\" />\r\n      <option name=\"SDK_NAME\" value=\"Python 3.12 (Best-offer-finder)\" />\r\n      <option name=\"WORKING_DIRECTORY\" value=\"$PROJECT_DIR$/BOF-WS/Back-end\" />\r\n      <option name=\"IS_MODULE_SDK\" value=\"false\" />\r\n      <option name=\"ADD_CONTENT_ROOTS\" value=\"true\" />\r\n      <option name=\"ADD_SOURCE_ROOTS\" value=\"true\" />\r\n      <option name=\"RUN_TOOL\" value=\"\" />\r\n      <option name=\"SCRIPT_NAME\" value=\"$PROJECT_DIR$/BOF-WS/Back-end/main.py\" />\r\n      <option name=\"PARAMETERS\" value=\"\" />\r\n      <option name=\"SHOW_COMMAND_LINE\" value=\"false\" />\r\n      <option name=\"EMULATE_TERMINAL\" value=\"false\" />\r\n      <option name=\"MODULE_MODE\" value=\"false\" />\r\n      <option name=\"REDIRECT_INPUT\" value=\"false\" />\r\n      <option name=\"INPUT_FILE\" value=\"\" />\r\n      <method v=\"2\" />\r\n    </configuration>\r\n    <configuration name=\"scratch\" type=\"PythonConfigurationType\" factoryName=\"Python\" temporary=\"true\" nameIsGenerated=\"true\">\r\n      <module name=\"Best-offer-finder\" />\r\n      <option name=\"ENV_FILES\" value=\"\" />\r\n      <option name=\"INTERPRETER_OPTIONS\" value=\"\" />\r\n      <option name=\"PARENT_ENVS\" value=\"true\" />\r\n      <envs>\r\n        <env name=\"PYTHONUNBUFFERED\" value=\"1\" />\r\n      </envs>\r\n      <option name=\"SDK_HOME\" value=\"\" />\r\n      <option name=\"SDK_NAME\" value=\"Python 3.12 (Best-offer-finder)\" />\r\n      <option name=\"WORKING_DIRECTORY\" value=\"$PROJECT_DIR$/BOF-WS/Back-end\" />\r\n      <option name=\"IS_MODULE_SDK\" value=\"false\" />\r\n      <option name=\"ADD_CONTENT_ROOTS\" value=\"true\" />\r\n      <option name=\"ADD_SOURCE_ROOTS\" value=\"true\" />\r\n      <option name=\"RUN_TOOL\" value=\"\" />\r\n      <option name=\"SCRIPT_NAME\" value=\"$PROJECT_DIR$/BOF-WS/Back-end/scratch.py\" />\r\n      <option name=\"PARAMETERS\" value=\"\" />\r\n      <option name=\"SHOW_COMMAND_LINE\" value=\"false\" />\r\n      <option name=\"EMULATE_TERMINAL\" value=\"false\" />\r\n      <option name=\"MODULE_MODE\" value=\"false\" />\r\n      <option name=\"REDIRECT_INPUT\" value=\"false\" />\r\n      <option name=\"INPUT_FILE\" value=\"\" />\r\n      <method v=\"2\" />\r\n    </configuration>\r\n    <configuration name=\"dev\" type=\"js.build_tools.npm\" nameIsGenerated=\"true\">\r\n      <package-json value=\"$PROJECT_DIR$/BOF-WS/Front-end/package.json\" />\r\n      <command value=\"run\" />\r\n      <scripts>\r\n        <script value=\"dev\" />\r\n      </scripts>\r\n      <node-interpreter value=\"project\" />\r\n      <envs />\r\n      <EXTENSION ID=\"com.intellij.javascript.debugger.execution.StartBrowserRunConfigurationExtension\">\r\n        <browser with-js-debugger=\"true\" />\r\n      </EXTENSION>\r\n      <method v=\"2\" />\r\n    </configuration>\r\n    <list>\r\n      <item itemvalue=\"npm.dev\" />\r\n      <item itemvalue=\"Python.scratch\" />\r\n      <item itemvalue=\"Python.main\" />\r\n    </list>\r\n    <recent_temporary>\r\n      <list>\r\n        <item itemvalue=\"Python.main\" />\r\n        <item itemvalue=\"Python.scratch\" />\r\n      </list>\r\n    </recent_temporary>\r\n  </component>\r\n  <component name=\"SharedIndexes\">\r\n    <attachedChunks>\r\n      <set>\r\n        <option value=\"bundled-js-predefined-d6986cc7102b-9b0f141eb926-JavaScript-WS-253.29346.242\" />\r\n      </set>\r\n    </attachedChunks>\r\n  </component>\r\n  <component name=\"TaskManager\">\r\n    <task active=\"true\" id=\"Default\" summary=\"Default task\">\r\n      <changelist id=\"7fe44e6f-ac06-41da-9594-b5039fb1dbb7\" name=\"Changes\" comment=\"\" />\r\n      <created>1769596143644</created>\r\n      <option name=\"number\" value=\"Default\" />\r\n      <option name=\"presentableId\" value=\"Default\" />\r\n      <updated>1769596143644</updated>\r\n      <workItem from=\"1769596144677\" duration=\"515000\" />\r\n      <workItem from=\"1769596701763\" duration=\"3399000\" />\r\n      <workItem from=\"1769604472184\" duration=\"478000\" />\r\n      <workItem from=\"1769605053261\" duration=\"339000\" />\r\n      <workItem from=\"1769605511166\" duration=\"4440000\" />\r\n      <workItem from=\"1769610015317\" duration=\"144000\" />\r\n      <workItem from=\"1769610181912\" duration=\"82000\" />\r\n      <workItem from=\"1769610290770\" duration=\"526000\" />\r\n      <workItem from=\"1769610843926\" duration=\"958000\" />\r\n      <workItem from=\"1769611820131\" duration=\"4613000\" />\r\n      <workItem from=\"1769670058425\" duration=\"4876000\" />\r\n    </task>\r\n    <task id=\"LOCAL-00001\" summary=\"update\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1769596529033</created>\r\n      <option name=\"number\" value=\"00001\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00001\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1769596529033</updated>\r\n    </task>\r\n    <option name=\"localTasksCounter\" value=\"2\" />\r\n    <servers />\r\n  </component>\r\n  <component name=\"TypeScriptGeneratedFilesManager\">\r\n    <option name=\"version\" value=\"3\" />\r\n  </component>\r\n  <component name=\"Vcs.Log.Tabs.Properties\">\r\n    <option name=\"TAB_STATES\">\r\n      <map>\r\n        <entry key=\"MAIN\">\r\n          <value>\r\n            <State />\r\n          </value>\r\n        </entry>\r\n      </map>\r\n    </option>\r\n  </component>\r\n  <component name=\"VcsManagerConfiguration\">\r\n    <MESSAGE value=\"update\" />\r\n    <option name=\"LAST_COMMIT_MESSAGE\" value=\"update\" />\r\n  </component>\r\n</project>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/workspace.xml b/.idea/workspace.xml
+--- a/.idea/workspace.xml	(revision f24d6c93cd667640819bb46946d8b0808a241b09)
++++ b/.idea/workspace.xml	(date 1769687864536)
+@@ -5,9 +5,15 @@
+   </component>
+   <component name="ChangeListManager">
+     <list default="true" id="7fe44e6f-ac06-41da-9594-b5039fb1dbb7" name="Changes" comment="update">
++      <change afterPath="$PROJECT_DIR$/.idea/dataSources.xml" afterDir="false" />
++      <change afterPath="$PROJECT_DIR$/.idea/db-forest-config.xml" afterDir="false" />
++      <change afterPath="$PROJECT_DIR$/.idea/sqldialects.xml" afterDir="false" />
++      <change afterPath="$PROJECT_DIR$/BOF-WS/Front-end/src/components/CardSkeleton.tsx" afterDir="false" />
+       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+       <change beforePath="$PROJECT_DIR$/BOF-WS/Back-end/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/BOF-WS/Back-end/main.py" afterDir="false" />
+       <change beforePath="$PROJECT_DIR$/BOF-WS/Back-end/scratch.py" beforeDir="false" afterPath="$PROJECT_DIR$/BOF-WS/Back-end/scratch.py" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/BOF-WS/Front-end/src/App.jsx" beforeDir="false" afterPath="$PROJECT_DIR$/BOF-WS/Front-end/src/App.jsx" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/BOF-WS/Front-end/src/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/BOF-WS/Front-end/src/styles.css" afterDir="false" />
+     </list>
+     <option name="SHOW_DIALOG" value="false" />
+     <option name="HIGHLIGHT_CONFLICTS" value="true" />
+@@ -67,6 +73,7 @@
+     &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+     &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
++    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+     &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+     &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+     &quot;javascript.preferred.runtime.type.id&quot;: &quot;node&quot;,
+@@ -81,6 +88,11 @@
+     &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;,
+     &quot;ts.external.directory.path&quot;: &quot;C:\\Program Files\\JetBrains\\WebStorm 2025.3.1.1\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external&quot;,
+     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
++  },
++  &quot;keyToStringList&quot;: {
++    &quot;DatabaseDriversLRU&quot;: [
++      &quot;sqlite&quot;
++    ]
+   }
+ }</component>
+   <component name="RecentsManager">
+@@ -92,7 +104,7 @@
+       <recent name="C:\Users\night\WebstormProjects\Best-offer-finder\BOF-WS\Front-end\public" />
+     </key>
+   </component>
+-  <component name="RunManager" selected="npm.dev">
++  <component name="RunManager" selected="Python.scratch">
+     <configuration name="main" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+       <module name="Best-offer-finder" />
+       <option name="ENV_FILES" value="" />
+@@ -155,14 +167,14 @@
+       <method v="2" />
+     </configuration>
+     <list>
+-      <item itemvalue="npm.dev" />
++      <item itemvalue="Python.main" />
+       <item itemvalue="Python.scratch" />
+-      <item itemvalue="Python.main" />
++      <item itemvalue="npm.dev" />
+     </list>
+     <recent_temporary>
+       <list>
++        <item itemvalue="Python.scratch" />
+         <item itemvalue="Python.main" />
+-        <item itemvalue="Python.scratch" />
+       </list>
+     </recent_temporary>
+   </component>
+@@ -190,7 +202,7 @@
+       <workItem from="1769610290770" duration="526000" />
+       <workItem from="1769610843926" duration="958000" />
+       <workItem from="1769611820131" duration="4613000" />
+-      <workItem from="1769670058425" duration="4876000" />
++      <workItem from="1769670058425" duration="8316000" />
+     </task>
+     <task id="LOCAL-00001" summary="update">
+       <option name="closed" value="true" />
+Index: BOF-WS/Back-end/main.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import asyncio\r\nimport sys\r\nfrom contextlib import asynccontextmanager\r\nfrom fastapi import FastAPI, HTTPException, Query\r\nfrom fastapi.middleware.cors import CORSMiddleware\r\nfrom fastapi.responses import Response\r\nimport httpx\r\n\r\n# Фикс для Windows\r\nif sys.platform == 'win32':\r\n    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())\r\n\r\n_cached_ads = []\r\nhttp_client = None\r\n\r\n@asynccontextmanager\r\nasync def lifespan(app: FastAPI):\r\n    global _cached_ads, http_client\r\n    http_client = httpx.AsyncClient(timeout=15.0, follow_redirects=True)\r\n\r\n    print(\"\uD83D\uDE80 Сервер запускается...\")\r\n\r\n    # Первичная загрузка (по умолчанию iPhone 15)\r\n    try:\r\n        from scratch import parse_farpost\r\n        print(\"\uD83D\uDCE1 Загружаем стартовые объявления (iPhone 15)...\")\r\n        _cached_ads = await parse_farpost(limit=10, query=\"Apple iPhone 15\")\r\n        print(f\"✅ Старт завершен! В кэше: {len(_cached_ads)}\")\r\n    except Exception as e:\r\n        print(f\"⚠\uFE0F Ошибка при старте: {e}\")\r\n        _cached_ads = []\r\n\r\n    yield\r\n\r\n    if http_client:\r\n        await http_client.aclose()\r\n\r\napp = FastAPI(title=\"BOF Parser API\", lifespan=lifespan)\r\n\r\napp.add_middleware(\r\n    CORSMiddleware,\r\n    allow_origins=[\"*\"],\r\n    allow_methods=[\"*\"],\r\n    allow_headers=[\"*\"],\r\n)\r\n\r\n# \uD83D\uDC47 ГЛАВНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ\r\n@app.get(\"/api/items\")\r\nasync def get_items(q: str = Query(None)):\r\n    \"\"\"\r\n    Если передан q (например ?q=Samsung), ищем в реальном времени.\r\n    Если нет - отдаем кэшированный iPhone 15.\r\n    \"\"\"\r\n    global _cached_ads\r\n\r\n    # 1. Если есть поисковый запрос\r\n    if q:\r\n        print(f\"\uD83D\uDD0E Пришел запрос на поиск: {q}\")\r\n        from scratch import parse_farpost\r\n        try:\r\n            # Запускаем парсер под конкретный запрос\r\n            search_results = await parse_farpost(limit=15, query=q)\r\n            return {\"items\": search_results}\r\n        except Exception as e:\r\n            print(f\"❌ Ошибка поиска: {e}\")\r\n            raise HTTPException(status_code=500, detail=\"Ошибка при поиске\")\r\n\r\n    # 2. Если запроса нет - отдаем то, что загрузили при старте\r\n    return {\"items\": _cached_ads or []}\r\n\r\n@app.get(\"/proxy/image\")\r\nasync def proxy_image(url: str):\r\n    if not url or not http_client: return Response(status_code=400)\r\n    try:\r\n        resp = await http_client.get(url)\r\n        return Response(content=resp.content, media_type=resp.headers.get(\"content-type\"))\r\n    except:\r\n        return Response(status_code=404)\r\n\r\nif __name__ == \"__main__\":\r\n    import uvicorn\r\n    # reload=False важно для Windows + Playwright\r\n    uvicorn.run(\"main:app\", host=\"0.0.0.0\", port=8000, reload=False, loop=\"asyncio\")
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/BOF-WS/Back-end/main.py b/BOF-WS/Back-end/main.py
+--- a/BOF-WS/Back-end/main.py	(revision f24d6c93cd667640819bb46946d8b0808a241b09)
++++ b/BOF-WS/Back-end/main.py	(date 1769682524760)
+@@ -1,37 +1,67 @@
+ import asyncio
+ import sys
++import json
++import time
++import sqlite3
+ from contextlib import asynccontextmanager
+ from fastapi import FastAPI, HTTPException, Query
+ from fastapi.middleware.cors import CORSMiddleware
+ from fastapi.responses import Response
+ import httpx
+ 
+-# Фикс для Windows
++# Фикс для Windows + Playwright
+ if sys.platform == 'win32':
+     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+ 
++# --- Настройка Базы Данных Кэша ---
++DB_FILE = "search_cache.db"
++
++def init_db():
++    with sqlite3.connect(DB_FILE) as conn:
++        conn.execute("""
++                     CREATE TABLE IF NOT EXISTS cache (
++                                                          query TEXT PRIMARY KEY,
++                                                          data TEXT,
++                                                          timestamp REAL
++                     )
++                     """)
++
++def get_cached_results(query: str):
++    with sqlite3.connect(DB_FILE) as conn:
++        cursor = conn.execute("SELECT data, timestamp FROM cache WHERE query = ?", (query,))
++        row = cursor.fetchone()
++        if row:
++            data_json, ts = row
++            # Кэш валиден 1 час и данные не пустые
++            if (time.time() - ts < 3600*24) and (data_json != "[]"):
++                return json.loads(data_json)
++    return None
++
++def save_to_cache(query: str, data: list):
++    with sqlite3.connect(DB_FILE) as conn:
++        conn.execute("INSERT OR REPLACE INTO cache VALUES (?, ?, ?)",
++                     (query, json.dumps(data), time.time()))
++
++# --- Основной код сервера ---
+ _cached_ads = []
+ http_client = None
+ 
+ @asynccontextmanager
+ async def lifespan(app: FastAPI):
+     global _cached_ads, http_client
++    init_db()
+     http_client = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
+ 
+-    print("🚀 Сервер запускается...")
+-
+-    # Первичная загрузка (по умолчанию iPhone 15)
++    print("🚀 Сервер запускается, прогреваем кэш...")
+     try:
+         from scratch import parse_farpost
+-        print("📡 Загружаем стартовые объявления (iPhone 15)...")
+-        _cached_ads = await parse_farpost(limit=10, query="Apple iPhone 15")
+-        print(f"✅ Старт завершен! В кэше: {len(_cached_ads)}")
++        # Начальная загрузка
++        _cached_ads = await parse_farpost(limit=15, query="Apple iPhone 15")
++        save_to_cache("Apple iPhone 15", _cached_ads)
+     except Exception as e:
+         print(f"⚠️ Ошибка при старте: {e}")
+-        _cached_ads = []
+ 
+     yield
+-
+     if http_client:
+         await http_client.aclose()
+ 
+@@ -44,29 +74,26 @@
+     allow_headers=["*"],
+ )
+ 
+-# 👇 ГЛАВНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ
+ @app.get("/api/items")
+ async def get_items(q: str = Query(None)):
+-    """
+-    Если передан q (например ?q=Samsung), ищем в реальном времени.
+-    Если нет - отдаем кэшированный iPhone 15.
+-    """
+-    global _cached_ads
++    query_text = q if q else "Apple iPhone 15"
+ 
+-    # 1. Если есть поисковый запрос
+-    if q:
+-        print(f"🔎 Пришел запрос на поиск: {q}")
+-        from scratch import parse_farpost
+-        try:
+-            # Запускаем парсер под конкретный запрос
+-            search_results = await parse_farpost(limit=15, query=q)
+-            return {"items": search_results}
+-        except Exception as e:
+-            print(f"❌ Ошибка поиска: {e}")
+-            raise HTTPException(status_code=500, detail="Ошибка при поиске")
+-
+-    # 2. Если запроса нет - отдаем то, что загрузили при старте
+-    return {"items": _cached_ads or []}
++    # 1. Проверяем кэш
++    cached = get_cached_results(query_text)
++    if cached:
++        print(f"📦 Возвращаем из кэша: {query_text}")
++        return {"items": cached}
++
++    # 2. Если в кэше нет — парсим
++    print(f"🔎 Кэш пуст, начинаем парсинг: {query_text}")
++    from scratch import parse_farpost
++    try:
++        results = await parse_farpost(limit=20, query=query_text)
++        save_to_cache(query_text, results)
++        return {"items": results}
++    except Exception as e:
++        print(f"❌ Ошибка поиска: {e}")
++        raise HTTPException(status_code=500, detail="Ошибка при парсинге")
+ 
+ @app.get("/proxy/image")
+ async def proxy_image(url: str):
+@@ -79,5 +106,4 @@
+ 
+ if __name__ == "__main__":
+     import uvicorn
+-    # reload=False важно для Windows + Playwright
+     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False, loop="asyncio")
+\ No newline at end of file
+Index: .idea/dataSources.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/dataSources.xml b/.idea/dataSources.xml
+new file mode 100644
+--- /dev/null	(date 1769687864585)
++++ b/.idea/dataSources.xml	(date 1769687864585)
+@@ -0,0 +1,19 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<project version="4">
++  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
++    <data-source source="LOCAL" name="identifier.sqlite" uuid="1dab3b76-7dbe-4195-9b49-65734eb74d23">
++      <driver-ref>sqlite.xerial</driver-ref>
++      <synchronize>true</synchronize>
++      <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
++      <jdbc-url>jdbc:sqlite:identifier.sqlite</jdbc-url>
++      <working-dir>$ProjectFileDir$</working-dir>
++    </data-source>
++    <data-source source="LOCAL" name="search_cache" uuid="96285f7b-dc54-4c1d-979d-a1e50f048bb7">
++      <driver-ref>sqlite.xerial</driver-ref>
++      <synchronize>true</synchronize>
++      <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
++      <jdbc-url>jdbc:sqlite:$PROJECT_DIR$/BOF-WS/Back-end/search_cache.db</jdbc-url>
++      <working-dir>$ProjectFileDir$</working-dir>
++    </data-source>
++  </component>
++</project>
+\ No newline at end of file

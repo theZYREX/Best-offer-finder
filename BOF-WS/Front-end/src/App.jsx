@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import SearchBar from "./components/SearchBar.tsx";
 import SearchButton from "./components/SearchButton.tsx";
 import Card from "./components/Card.tsx";
+import CardSkeleton from "./components/CardSkeleton.tsx";
 import NavMenu from "./components/NavMenu.tsx";
 
 function App() {
@@ -17,11 +18,9 @@ function App() {
         if (savedFavs) {
             setFavorites(JSON.parse(savedFavs));
         }
-        // Первичная загрузка ленты
         fetchItems();
     }, []);
 
-    // 2. Функция загрузки товаров
     const fetchItems = async (query = "") => {
         setLoading(true);
         try {
@@ -39,22 +38,18 @@ function App() {
         }
     };
 
-    // 3. Логика добавления/удаления из избранного
     const toggleFavorite = (external_id) => {
-        // Ищем, есть ли товар уже в избранном (среди favorites или среди текущих items)
         const isAlreadyFav = favorites.some(fav => fav.external_id === external_id);
 
         let newFavorites;
         if (isAlreadyFav) {
-            // Если есть - удаляем
             newFavorites = favorites.filter(fav => fav.external_id !== external_id);
         } else {
-            // Если нет - находим товар в общем списке items и добавляем
             const itemToAdd = items.find(item => item.external_id === external_id);
             if (itemToAdd) {
                 newFavorites = [...favorites, itemToAdd];
             } else {
-                return; // Защита от ошибок
+                return;
             }
         }
 
@@ -72,10 +67,18 @@ function App() {
     const renderContent = () => {
         if (loading && activeTab === 'feed') {
             return (
-                <div className="text-center text-white mt-5">
-                    <div className="spinner-border text-success" role="status"></div>
-                    <p>Загрузка...</p>
-                </div>
+                <>
+                    <div className="text-center text-white mt-5">
+                        <div className="spinner-border text-success" role="status"></div>
+                        <p>Загрузка...</p>
+                    </div>
+
+                    <div className="row justify-content-center">
+                        {[1, 2, 3, 4].map(n => <CardSkeleton key={n} />)}
+                    </div>
+                </>
+
+
             );
         }
 
@@ -130,7 +133,6 @@ function App() {
                         date={item.date}
                         image_url={item.image_url}
                         description={item.description}
-                        // Передаем состояние: проверяем, есть ли этот конкретный ID в массиве favorites
                         isFavorite={favorites.some(fav => fav.external_id === item.external_id)}
                         onToggleFavorite={toggleFavorite}
                     />
