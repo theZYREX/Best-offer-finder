@@ -31,7 +31,10 @@ async def parse_farpost(limit: int = 20):
             print(f"Найдено {len(listings)} объявлений. Обрабатываю первые {limit}.")
 
             for i, listing in enumerate(listings[:limit]):
-                item_data = {}
+                item_data = {'external_id': await listing.get_attribute('data-doc-id')}
+
+                if not item_data['external_id']:
+                    continue
 
                 link_element = await listing.query_selector('a.bulletinLink')
                 if link_element:
@@ -73,13 +76,22 @@ async def parse_farpost(limit: int = 20):
                     item_data['image_url'] = image_url
 
                     description = "Описание не найдено"
-                    desc_elem = await detail_page.query_selector(
-                        '.bulletin-description, [data-role="description"], [itemprop="description"]'
-                    )
+
+                    # 1. Пробуем найти новый формат (как в твоем примере HTML)
+                    desc_elem = await detail_page.query_selector('.bulletinText, p[data-field="text"]')
+
+                    # 2. Если не нашли, пробуем старые селекторы
+                    if not desc_elem:
+                        desc_elem = await detail_page.query_selector(
+                            '.bulletin-description, [data-role="description"], [itemprop="description"]'
+                        )
+
                     if desc_elem:
                         raw_desc = await desc_elem.inner_text()
-                        description = ' '.join(raw_desc.split())  # убираем лишние переносы
+                        # Убираем лишние пробелы, но оставляем структуру
+                        description = raw_desc.strip()
                     else:
+                        # 3. Fallback: берем из alt картинки
                         alt = await img_elem.get_attribute('alt') if img_elem else ""
                         if alt:
                             description = alt

@@ -1,13 +1,16 @@
 interface CardProps {
+    external_id: string;
     title: string;
     price: number;
     url: string;
     date: string;
     image_url?: string;
     description?: string;
+    isFavorite: boolean;
+    onToggleFavorite: (id: string) => void;
 }
 
-function Card({ title,date, price, url, image_url, description }: CardProps) {
+function Card({external_id, title,date, price, url, image_url, description, isFavorite, onToggleFavorite }: CardProps) {
     const imageUrl = image_url
         ? `http://localhost:8000/proxy/image?url=${encodeURIComponent(image_url)}`
         : "https://via.placeholder.com/300?text=No+Image";
@@ -25,8 +28,14 @@ function Card({ title,date, price, url, image_url, description }: CardProps) {
                         <div className="col text-center">
                             <h4 className='farpost'>Farpost</h4>
                         </div>
-                        <div className="col d-flex justify-content-end text-muted small">
-                            
+                        <div className="col d-flex justify-content-end">
+                            <i
+                                className={`bi fs-3 ${isFavorite ? 'bi-heart-fill text-danger' : 'bi-heart text-secondary'}`}
+                                onClick={() => onToggleFavorite(external_id)}
+                                style={{ cursor: 'pointer', transition: 'transform 0.2s' }}
+                                onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.9)'}
+                                onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                            ></i>
                         </div>
                     </div>
                 </div>
